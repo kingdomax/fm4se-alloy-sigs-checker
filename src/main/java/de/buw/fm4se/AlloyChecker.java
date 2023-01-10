@@ -2,6 +2,7 @@ package de.buw.fm4se;
 
 import java.util.Map;
 import java.util.List;
+import java.util.HashMap;
 import java.util.ArrayList;
 
 import edu.mit.csail.sdg.ast.Sig;
@@ -13,25 +14,26 @@ import edu.mit.csail.sdg.ast.ExprUnary.Op;
 import edu.mit.csail.sdg.alloy4.A4Reporter;
 import edu.mit.csail.sdg.alloy4.ConstList;
 import edu.mit.csail.sdg.translator.A4Options;
+import edu.mit.csail.sdg.translator.A4Solution;
 import edu.mit.csail.sdg.translator.TranslateAlloyToKodkod;
 
 public class AlloyChecker {
 
 	public static List<String> findDeadSignatures(String fileName, A4Options options, A4Reporter reporter) {
-		return getSignatureListThatMatchPredefinedExpression(Op.SOME, fileName, options, reporter);
+		return getSignatureListThatNotSatisfyPredefinedExpression(Op.SOME, fileName, options, reporter);
 	}
 
 	public static List<String> findCoreSignatures(String fileName, A4Options options, A4Reporter reporter) {
-		return getSignatureListThatMatchPredefinedExpression(Op.NO, fileName, options, reporter);
+		return getSignatureListThatNotSatisfyPredefinedExpression(Op.NO, fileName, options, reporter);
 	}
 
-	private static List<String> getSignatureListThatMatchPredefinedExpression(Op operation, String fileName, A4Options options, A4Reporter reporter) {
+	private static List<String> getSignatureListThatNotSatisfyPredefinedExpression(Op operation, String fileName, A4Options options, A4Reporter reporter) {
 		// Parse file
 		Module world = CompUtil.parseEverything_fromFile(reporter, null, fileName);
 
 		// Get first command & all signatures
-		ConstList<Sig> allSignatures = world.getAllReachableUserDefinedSigs();
 		Command firstCommand = world.getAllCommands().get(0);
+		ConstList<Sig> allSignatures = world.getAllReachableUserDefinedSigs();
 
 		// Modify run command with predefined expression
 		List<String> results = new ArrayList<>();
@@ -56,14 +58,36 @@ public class AlloyChecker {
 	 * @param rep
 	 * @return map from signature names to minimum scopes
 	 */
-	public static Map<String, Integer> findMinScope(String fileName, A4Options options, A4Reporter rep) {
-		// Determine the minimum scope for each signature in an Alloy model, 
-		// i.e., map each signature name to an integer scope for which the model is still satisfiable.
-		// - Again, use the first command in the Alloy file.
-		// - You may update the scope of a signature sig in a command cmd to integer i by using the returned Command of cmd.change(sig, false, i).
-		// - Computing a maximal scope is a bit tricky and done for you in method getMaxScope.
-		// * อาจารย์เริ่ม อธิบาย  ตั้งแต่นาที8:30
-		return null;
+	public static Map<String, Integer> findMinScope(String fileName, A4Options options, A4Reporter reporter) {
+		Map <String, Integer> result = new HashMap<String, Integer>();
+		Module world = CompUtil.parseEverything_fromFile(reporter, null, fileName);
+		Command command = world.getAllCommands().get(0);
+		ConstList<Sig> allSignatures = world.getAllReachableUserDefinedSigs();
+
+		for (Sig signature : allSignatures) {
+			var minScope = -1;
+			var maxScope = getMaxScope(signature, command);
+			A4Solution solution = TranslateAlloyToKodkod.execute_command(reporter, allSignatures, command, options);
+
+			while (solution.satisfiable() || minScope == -1) { // -1 mean min scope value is never set
+				try {
+					var reducedScopeCommand = command.change(signature, true, --maxScope);
+					solution = TranslateAlloyToKodkod.execute_command(reporter, allSignatures, reducedScopeCommand, options);
+					if (solution.satisfiable()) { minScope = maxScope; }
+				} catch (Exception e) {
+					if (minScope != -1) { // if min scope value is already set, use that value
+						break;
+					} else if (maxScope < 0) { // if min scope value is never set but it already iterate below 0, use 0
+						minScope = 0;
+						break;
+					}
+				}
+			}
+
+			result.put(signature.label, minScope);
+		}
+
+		return result;
 	}
 
 	/**
